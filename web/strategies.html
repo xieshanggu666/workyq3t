@@ -21,6 +21,7 @@
         <nav class="nav-links">
           <a href="/">工作台</a>
           <a href="/strategies.html" class="active">策略库</a>
+          <a href="/plans.html">实盘计划</a>
         </nav>
         <label class="role-picker">角色
           <select v-model="role" @change="onRoleChange">
@@ -80,7 +81,7 @@
         </div>
         <table class="ver-table">
           <thead>
-            <tr><th>版本</th><th>状态</th><th>提交</th><th>评审</th><th>发布/撤回</th><th>运行记录</th><th>操作</th></tr>
+            <tr><th>版本</th><th>状态</th><th>提交</th><th>评审</th><th>发布/撤回</th><th>运行/实盘</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="v in s.versions" :key="v.v">
@@ -93,8 +94,9 @@
               </td>
               <td class="muted">{{ fmtTime(v.published_at) }}<template v-if="v.withdrawn_at"> / {{ fmtTime(v.withdrawn_at) }}</template></td>
               <td>
-                <button v-if="v.runs.length" class="link" @click="toggleHistory(s.id, v.v)">{{ v.runs.length }} 次 ▾</button>
-                <span v-else class="muted">—</span>
+                <button v-if="v.runs.length" class="link" @click="toggleHistory(s.id, v.v)">回测 {{ v.runs.length }} ▾</button>
+                <button v-if="v.live_stats && v.live_stats.length" class="link" @click="toggleLive(s.id, v.v)">实盘 {{ v.live_stats.length }} ▾</button>
+                <span v-if="!v.runs.length && !(v.live_stats && v.live_stats.length)" class="muted">—</span>
               </td>
               <td class="ops">
                 <button class="link" @click="runVersion(s, v)" :disabled="busy">▶ 运行</button>
@@ -137,6 +139,32 @@
                 <td class="down">{{ (r.stats.max_drawdown * 100).toFixed(2) }}%</td>
                 <td>{{ r.mc_prob_loss == null ? '—' : (r.mc_prob_loss * 100).toFixed(1) + '%' }}</td>
                 <td><button class="link" @click="viewRun(s, historyFor.v, r)">查看曲线</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="liveFor && liveFor.sid === s.id" class="history-box">
+          <h4>v{{ liveFor.v }} 实盘统计（跟踪计划暂停时回写，记录不可变）</h4>
+          <table class="ver-table">
+            <thead><tr><th>回写时间</th><th>计划</th><th>参与人数</th><th>跟踪天数</th><th>合计收益</th><th>合计最大回撤</th><th>投资者明细</th></tr></thead>
+            <tbody>
+              <tr v-for="r in liveFor.rows" :key="r.id">
+                <td class="muted">{{ fmtTime(r.at) }}</td>
+                <td>{{ r.plan_name }} <span class="muted">{{ r.plan_id }}</span></td>
+                <td>{{ r.investors.length }}</td>
+                <td>{{ r.aggregate ? r.aggregate.days : 0 }}</td>
+                <td v-if="r.aggregate" :class="r.aggregate.stats.total_return >= 0 ? 'up' : 'down'">{{ (r.aggregate.stats.total_return * 100).toFixed(2) }}%</td>
+                <td v-else class="muted">—</td>
+                <td v-if="r.aggregate" class="down">{{ (r.aggregate.stats.max_drawdown * 100).toFixed(2) }}%</td>
+                <td v-else class="muted">—</td>
+                <td>
+                  <details class="snap-detail" v-if="r.investors.length">
+                    <summary>查看</summary>
+                    <pre>{{ fmtLiveInvestors(r.investors) }}</pre>
+                  </details>
+                  <span v-else class="muted">—</span>
+                </td>
               </tr>
             </tbody>
           </table>

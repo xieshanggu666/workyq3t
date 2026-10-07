@@ -23,6 +23,7 @@ const app = createApp({
       editErr: "",
       reviewComments: {},
       historyFor: null,    // { sid, v, runs }
+      liveFor: null,       // { sid, v, rows }
       result: null,
     };
   },
@@ -57,6 +58,7 @@ const app = createApp({
       localStorage.setItem("bt_user", this.user);
       this.editing = null;
       this.historyFor = null;
+      this.liveFor = null;
       this.result = null;
       this.guard(() => this.load());
     },
@@ -122,6 +124,19 @@ const app = createApp({
       const s = this.strategies.find(x => x.id === sid);
       const ver = s && s.versions.find(x => x.v === v);
       this.historyFor = ver ? { sid, v, runs: ver.runs.slice().reverse() } : null;
+    },
+    toggleLive(sid, v) {
+      if (this.liveFor && this.liveFor.sid === sid && this.liveFor.v === v) { this.liveFor = null; return; }
+      const s = this.strategies.find(x => x.id === sid);
+      const ver = s && s.versions.find(x => x.v === v);
+      this.liveFor = ver && ver.live_stats ? { sid, v, rows: ver.live_stats.slice().reverse() } : null;
+    },
+    fmtLiveInvestors(investors) {
+      return investors.map(iv => {
+        const r = iv.stats ? (iv.stats.total_return * 100).toFixed(2) + "%" : "—";
+        const dd = iv.stats ? (iv.stats.max_drawdown * 100).toFixed(2) + "%" : "—";
+        return `${iv.user}：${iv.days} 天，平均持仓 ${(iv.avg_position * 100).toFixed(0)}%，收益 ${r}，最大回撤 ${dd}`;
+      }).join("\n");
     },
     viewRun(s, v, run) {
       this.result = {

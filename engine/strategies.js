@@ -313,6 +313,26 @@ function createStore(file) {
           : { quantiles: null, prob_loss: null, seed: mcSeed, steps: 0 },
       };
     },
+
+    // 供实盘跟踪计划校验：版本必须处于已发布状态
+    getPublishedRef(id, v) {
+      const { s, ver } = find(id, v);
+      if (ver.status !== "published") {
+        throw fail(409, `策略 ${id} v${v} 当前为「${STATUS_LABEL[ver.status]}」，仅已发布版本可建立实盘计划`);
+      }
+      return { s, ver };
+    },
+
+    // 实盘计划暂停时回写：向版本追加一条不可变实盘统计记录
+    // （版本已撤回也照常回写，只增不改，历史不断档）
+    appendLiveStats(id, v, rec) {
+      const { ver } = find(id, v);
+      ver.live_stats = ver.live_stats || [];
+      const r = { id: "ls" + ++data.runSeq, at: now(), ...clone(rec) };
+      ver.live_stats.push(r);
+      save();
+      return r;
+    },
   };
   return store;
 }
