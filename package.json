@@ -1,0 +1,10 @@
+{
+  "name": "invest-backtest",
+  "version": "1.0.0",
+  "description": "个人投资回测与风险分析平台",
+  "scripts": {
+    "dev": "node start.js",
+    "test": "node tests/run_tests.js"
+  },
+  "license": "MIT"
+}

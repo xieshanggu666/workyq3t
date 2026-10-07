@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>策略库 · 回测工坊</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/vendor/vue.global.js"></script>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">▥</div>
+        <div>
+          <h1>策略库</h1>
+          <p>版本管理 · 审核发布 · 快照运行</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <nav class="nav-links">
+          <a href="/">工作台</a>
+          <a href="/strategies.html" class="active">策略库</a>
+        </nav>
+        <label class="role-picker">角色
+          <select v-model="role" @change="onRoleChange">
+            <option value="author">策略作者</option>
+            <option value="reviewer">评审员</option>
+            <option value="investor">投资者</option>
+          </select>
+        </label>
+        <label class="role-picker">用户 <input class="user-input" v-model.trim="user" @change="onRoleChange" placeholder="用户名"></label>
+      </div>
+    </header>
+
+    <p class="hint role-hint">
+      <template v-if="role === 'author'">作者：存草稿 → 送审；被驳回可重新打开修订；可撤回已发布版本；任意版本均可直接回测试算。</template>
+      <template v-else-if="role === 'reviewer'">评审员：处理待评审队列，通过后发布、驳回则退回作者；可撤回已发布版本；不能评审自己撰写的策略。</template>
+      <template v-else>投资者：只能查看并运行「已发布」版本；回测、风险指标与蒙特卡洛共用同一参数快照。</template>
+    </p>
+
+    <p v-if="err" class="err-banner">{{ err }}</p>
+
+    <section class="panel" v-if="role === 'author'">
+      <h3>新建策略</h3>
+      <div class="inline-form">
+        <input v-model.trim="newName" placeholder="策略名称，如：双均线趋势跟随">
+        <button class="btn primary" @click="createStrategy" :disabled="busy || !newName">＋ 创建（含 v1 草稿）</button>
+      </div>
+      <p class="hint">在工作台调好参数后，也可点顶部「存为策略草稿」直接建档。</p>
+    </section>
+
+    <section class="panel" v-if="role === 'reviewer'">
+      <h3>待评审队列（{{ pendingList.length }}）</h3>
+      <p v-if="!pendingList.length" class="hint">暂无待评审版本。</p>
+      <div v-for="item in pendingList" :key="item.sid + '-' + item.v" class="review-item">
+        <div class="review-head">
+          <b>{{ item.name }}</b> <span class="muted">{{ item.sid }} · v{{ item.v }} · 作者 {{ item.author }} · 提交于 {{ fmtTime(item.submitted_at) }}</span>
+        </div>
+        <details class="snap-detail"><summary>参数快照</summary><pre>{{ fmtSnap(item.snapshot) }}</pre></details>
+        <p v-if="item.note" class="hint">作者备注：{{ item.note }}</p>
+        <div class="inline-form">
+          <input v-model.trim="reviewComments[item.sid + '-' + item.v]" placeholder="评审意见（驳回必填）">
+          <button class="btn primary" @click="review(item, 'approve')" :disabled="busy">✓ 通过并发布</button>
+          <button class="btn danger" @click="review(item, 'reject')" :disabled="busy">✗ 驳回退回</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>{{ role === 'investor' ? '已发布策略' : role === 'reviewer' ? '全部策略' : '我的策略' }}（{{ strategies.length }}）</h3>
+      <p v-if="!strategies.length" class="hint">暂无可见策略。</p>
+      <div v-for="s in strategies" :key="s.id" class="strategy-card">
+        <div class="strategy-head">
+          <div>
+            <b>{{ s.name }}</b>
+            <span class="muted"> {{ s.id }} · 作者 {{ s.author }} · 创建于 {{ fmtTime(s.created_at) }}</span>
+          </div>
+          <button v-if="s.mine && role === 'author'" class="btn" @click="addVersion(s)" :disabled="busy">＋ 基于最新版新建草稿</button>
+        </div>
+        <table class="ver-table">
+          <thead>
+            <tr><th>版本</th><th>状态</th><th>提交</th><th>评审</th><th>发布/撤回</th><th>运行记录</th><th>操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="v in s.versions" :key="v.v">
+              <td>v{{ v.v }}</td>
+              <td><span class="badge" :class="'st-' + v.status">{{ v.status_label }}</span></td>
+              <td class="muted">{{ fmtTime(v.submitted_at) }}</td>
+              <td class="muted">
+                <template v-if="v.reviewed_by">{{ v.reviewed_by }}<template v-if="v.review_comment">：{{ v.review_comment }}</template></template>
+                <template v-else>—</template>
+              </td>
+              <td class="muted">{{ fmtTime(v.published_at) }}<template v-if="v.withdrawn_at"> / {{ fmtTime(v.withdrawn_at) }}</template></td>
+              <td>
+                <button v-if="v.runs.length" class="link" @click="toggleHistory(s.id, v.v)">{{ v.runs.length }} 次 ▾</button>
+                <span v-else class="muted">—</span>
+              </td>
+              <td class="ops">
+                <button class="link" @click="runVersion(s, v)" :disabled="busy">▶ 运行</button>
+                <template v-if="s.mine && role === 'author'">
+                  <button v-if="v.status === 'draft'" class="link" @click="startEdit(s, v)">编辑</button>
+                  <button v-if="v.status === 'draft'" class="link" @click="submit(s, v)" :disabled="busy">送审</button>
+                  <button v-if="v.status === 'pending'" class="link" @click="retract(s, v)" :disabled="busy">撤回送审</button>
+                  <button v-if="v.status === 'rejected'" class="link" @click="reopen(s, v)" :disabled="busy">重新打开</button>
+                  <button v-if="v.status === 'published'" class="link" @click="withdraw(s, v)" :disabled="busy">撤回</button>
+                  <button class="link" @click="addVersion(s, v.v)" :disabled="busy">派生草稿</button>
+                </template>
+                <button v-if="role === 'reviewer' && v.status === 'published'" class="link" @click="withdraw(s, v)" :disabled="busy">撤回</button>
+                <button class="link" @click="openInWorkbench(v)">工作台打开</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div v-if="editing && editing.sid === s.id" class="editor-box">
+          <h4>编辑 v{{ editing.v }} 参数快照（草稿）</h4>
+          <textarea v-model="editing.text" rows="12" spellcheck="false"></textarea>
+          <p v-if="editErr" class="err-banner">{{ editErr }}</p>
+          <div class="inline-form">
+            <input v-model.trim="editing.note" placeholder="版本备注（可选）">
+            <button class="btn primary" @click="saveEdit(s)" :disabled="busy">校验并保存</button>
+            <button class="btn" @click="editing = null">取消</button>
+          </div>
+        </div>
+
+        <div v-if="historyFor && historyFor.sid === s.id" class="history-box">
+          <h4>v{{ historyFor.v }} 历史运行（撤回不影响已记录结果）</h4>
+          <table class="ver-table">
+            <thead><tr><th>时间</th><th>操作人</th><th>总收益</th><th>夏普</th><th>最大回撤</th><th>MC 亏损概率</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="r in historyFor.runs" :key="r.id">
+                <td class="muted">{{ fmtTime(r.at) }}</td>
+                <td>{{ r.by }}</td>
+                <td :class="r.total_return >= 0 ? 'up' : 'down'">{{ (r.total_return * 100).toFixed(2) }}%</td>
+                <td>{{ r.stats.sharpe.toFixed(2) }}</td>
+                <td class="down">{{ (r.stats.max_drawdown * 100).toFixed(2) }}%</td>
+                <td>{{ r.mc_prob_loss == null ? '—' : (r.mc_prob_loss * 100).toFixed(1) + '%' }}</td>
+                <td><button class="link" @click="viewRun(s, historyFor.v, r)">查看曲线</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" v-if="result">
+      <h3>运行结果 · {{ result.name }} v{{ result.version }}（{{ result.status_label }}）<span class="muted"> · {{ result.run_id }} · {{ fmtTime(result.run_at) }}</span></h3>
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-v" :class="result.stats.total_return >= 0 ? 'up' : 'down'">{{ (result.stats.total_return * 100).toFixed(2) }}%</div><div class="stat-k">总收益</div></div>
+        <div class="stat-card"><div class="stat-v">{{ (result.stats.cagr * 100).toFixed(2) }}%</div><div class="stat-k">年化</div></div>
+        <div class="stat-card"><div class="stat-v">{{ result.stats.sharpe.toFixed(2) }}</div><div class="stat-k">夏普</div></div>
+        <div class="stat-card"><div class="stat-v">{{ result.stats.sortino.toFixed(2) }}</div><div class="stat-k">索提诺</div></div>
+        <div class="stat-card"><div class="stat-v down">{{ (result.stats.max_drawdown * 100).toFixed(2) }}%</div><div class="stat-k">最大回撤</div></div>
+        <div class="stat-card"><div class="stat-v">{{ result.stats.calmar.toFixed(2) }}</div><div class="stat-k">卡玛</div></div>
+        <div class="stat-card"><div class="stat-v">{{ result.trades.length }}</div><div class="stat-k">交易笔数</div></div>
+        <div class="stat-card"><div class="stat-v">{{ result.mc.prob_loss == null ? '—' : (result.mc.prob_loss * 100).toFixed(1) + '%' }}</div><div class="stat-k">MC 亏损概率</div></div>
+      </div>
+      <div class="chart-grid">
+        <section class="panel chart-panel">
+          <h3>权益曲线与回撤</h3>
+          <canvas ref="echart" class="chart-canvas"></canvas>
+          <canvas ref="dchart" class="chart-canvas"></canvas>
+        </section>
+        <section class="panel chart-panel" v-if="result.mc.quantiles">
+          <h3>蒙特卡洛模拟（同一参数快照，种子 {{ result.mc.seed }}）</h3>
+          <canvas ref="mchart" class="chart-canvas"></canvas>
+        </section>
+      </div>
+    </section>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/strategies.js"></script>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>个人投资回测与风险分析平台</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/vendor/vue.global.js"></script>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">▥</div>
+        <div>
+          <h1>回测工坊</h1>
+          <p>个人投资回测与风险分析平台</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <nav class="nav-links">
+          <a href="/" class="active">工作台</a>
+          <a href="/strategies.html">策略库</a>
+        </nav>
+        <button class="btn" @click="saveAsDraft" :disabled="busy">☁ 存为策略草稿</button>
+        <button class="btn primary" @click="runAll" :disabled="busy">{{ busy ? '计算中…' : '⚡ 生成行情并回测' }}</button>
+      </div>
+    </header>
+
+    <div class="panel-row">
+      <section class="panel">
+        <h3>市场参数</h3>
+        <label>随机种子 <input type="number" v-model.number="market.seed" step="1"></label>
+        <label>交易日数 <input type="range" min="60" max="1200" step="10" v-model.number="market.days"> {{ market.days }}</label>
+        <label>初始价格 <input type="number" v-model.number="market.start" step="1"></label>
+        <label>日漂移 <input type="number" v-model.number="market.drift" step="0.0001"></label>
+        <label>日波动 <input type="number" v-model.number="market.vol" step="0.001"></label>
+      </section>
+
+      <section class="panel">
+        <h3>策略</h3>
+        <label>类型
+          <select v-model="strategy.type">
+            <option value="ma_cross">均线金叉</option>
+            <option value="rsi">RSI 超买超卖</option>
+            <option value="boll">布林带回归</option>
+            <option value="buy_hold">买入持有</option>
+          </select>
+        </label>
+        <template v-if="strategy.type === 'ma_cross'">
+          <label>快线 <input type="number" v-model.number="strategy.fast" step="1"></label>
+          <label>慢线 <input type="number" v-model.number="strategy.slow" step="1"></label>
+        </template>
+        <template v-else-if="strategy.type === 'rsi'">
+          <label>RSI 周期 <input type="number" v-model.number="strategy.rsiN" step="1"></label>
+          <label>超卖买入 <input type="number" v-model.number="strategy.rsiBuy" step="1"></label>
+          <label>超买卖出 <input type="number" v-model.number="strategy.rsiSell" step="1"></label>
+        </template>
+        <template v-else-if="strategy.type === 'boll'">
+          <label>布林周期 <input type="number" v-model.number="strategy.bbN" step="1"></label>
+          <label>倍数 <input type="number" v-model.number="strategy.bbK" step="0.1"></label>
+        </template>
+      </section>
+
+      <section class="panel">
+        <h3>交易参数</h3>
+        <label>初始资金 <input type="number" v-model.number="trade.cash" step="1000"></label>
+        <label>手续费率 <input type="number" v-model.number="trade.feeRate" step="0.0001"></label>
+        <label>滑点(bp) <input type="number" v-model.number="trade.slippageBp" step="1"></label>
+        <label>止损模式
+          <select v-model="trade.stopMode">
+            <option value="fixed">固定比例</option>
+            <option value="atr">ATR 动态（按波动状态）</option>
+            <option value="trail">ATR 追踪（逐日调整）</option>
+          </select>
+        </label>
+        <template v-if="trade.stopMode === 'fixed'">
+          <label>止损比例 <input type="number" v-model.number="trade.stopLoss" step="0.01"></label>
+          <label>止盈比例 <input type="number" v-model.number="trade.takeProfit" step="0.01"></label>
+        </template>
+        <template v-else>
+          <label>ATR 周期 <input type="number" v-model.number="trade.atrN" step="1" min="2"></label>
+          <label>止损 ATR 倍数 <input type="number" v-model.number="trade.atrStopMult" step="0.1"></label>
+          <label>止盈 ATR 倍数 <input type="number" v-model.number="trade.atrTargetMult" step="0.1"></label>
+          <label>波动窗口 <input type="number" v-model.number="trade.atrVolN" step="1" min="2"></label>
+          <label>低波动乘数 <input type="number" v-model.number="trade.volLowMult" step="0.1"></label>
+          <label>高波动乘数 <input type="number" v-model.number="trade.volHighMult" step="0.1"></label>
+          <p class="hint" v-if="trade.stopMode === 'atr'">触发距离 = 入场前 ATR × 倍数 × 波动乘数，入场当日锁定；高波动放宽、低波动收紧。预热期 ATR 不足时回退固定比例。</p>
+          <p class="hint" v-else>追踪规则：每个交易日按最新 ATR 与波动状态重算退出价——止损锚定持仓期最高收盘价、只紧不松，止盈随波动每日收放；预热期回退固定比例。</p>
+        </template>
+        <label>仓位比例 <input type="range" min="0.1" max="1" step="0.05" v-model.number="trade.positionRatio"> {{ (trade.positionRatio*100).toFixed(0) }}%</label>
+      </section>
+    </div>
+
+    <div class="stats-row" v-if="stats">
+      <div class="stat-card"><div class="stat-v" :class="stats.total_return >= 0 ? 'up' : 'down'">{{ (stats.total_return*100).toFixed(2) }}%</div><div class="stat-k">总收益</div></div>
+      <div class="stat-card"><div class="stat-v">{{ (stats.cagr*100).toFixed(2) }}%</div><div class="stat-k">年化</div></div>
+      <div class="stat-card"><div class="stat-v">{{ stats.sharpe.toFixed(2) }}</div><div class="stat-k">夏普</div></div>
+      <div class="stat-card"><div class="stat-v">{{ stats.sortino.toFixed(2) }}</div><div class="stat-k">索提诺</div></div>
+      <div class="stat-card"><div class="stat-v down">{{ (stats.max_drawdown*100).toFixed(2) }}%</div><div class="stat-k">最大回撤</div></div>
+      <div class="stat-card"><div class="stat-v">{{ stats.calmar.toFixed(2) }}</div><div class="stat-k">卡玛</div></div>
+      <div class="stat-card"><div class="stat-v">{{ (stats.win_rate*100).toFixed(1) }}%</div><div class="stat-k">胜率</div></div>
+      <div class="stat-card"><div class="stat-v">{{ stats.profit_factor === Infinity ? '∞' : stats.profit_factor.toFixed(2) }}</div><div class="stat-k">盈亏比</div></div>
+    </div>
+
+    <div class="chart-grid">
+      <section class="panel chart-panel">
+        <h3>行情与信号</h3>
+        <canvas ref="kchart" class="chart-canvas"></canvas>
+      </section>
+      <section class="panel chart-panel">
+        <h3>权益曲线与回撤</h3>
+        <canvas ref="echart" class="chart-canvas"></canvas>
+        <div class="mc-row">
+          <button class="btn" @click="runMonteCarlo" :disabled="busy">🎲 蒙特卡洛模拟</button>
+          <span v-if="mc" class="mc-info">亏损概率 {{ (mc.prob_loss*100).toFixed(1) }}%</span>
+        </div>
+        <canvas ref="mchart" class="chart-canvas" v-if="mc"></canvas>
+      </section>
+    </div>
+
+    <section class="panel" v-if="trades.length">
+      <h3>逐笔交易（{{ trades.length }} 笔）</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>买入日</th><th>卖出日</th><th>买入价</th><th>卖出价</th><th>止损价</th><th>止盈价</th><th>模式</th><th>波动状态</th><th>股数</th><th>盈亏</th><th>持有(bar)</th><th>原因</th></tr></thead>
+          <tbody>
+            <tr v-for="(t, i) in trades" :key="i">
+              <td>{{ i + 1 }}</td><td>{{ t.entry_date }}</td><td>{{ t.exit_date }}</td>
+              <td>{{ t.entry_price.toFixed(2) }}</td><td>{{ t.exit_price.toFixed(2) }}</td>
+              <td>
+                <template v-if="t.stop_price > 0">
+                  <span v-if="t.stop_mode === 'trail' && t.stop_init !== t.stop_price" :title="'追踪调整 ' + t.stop_updates + ' 次'">{{ t.stop_init.toFixed(2) }}→{{ t.stop_price.toFixed(2) }}</span>
+                  <template v-else>{{ t.stop_price.toFixed(2) }}</template>
+                </template>
+                <template v-else>—</template>
+              </td>
+              <td>
+                <template v-if="t.target_price > 0">
+                  <span v-if="t.stop_mode === 'trail' && t.target_init !== t.target_price">{{ t.target_init.toFixed(2) }}→{{ t.target_price.toFixed(2) }}</span>
+                  <template v-else>{{ t.target_price.toFixed(2) }}</template>
+                </template>
+                <template v-else>—</template>
+              </td>
+              <td>{{ { fixed: '固定', atr: 'ATR', trail: '追踪' }[t.stop_mode] || t.stop_mode }}</td>
+              <td>{{ t.vol_state }}</td>
+              <td>{{ t.shares }}</td>
+              <td :class="t.pnl >= 0 ? 'up' : 'down'">{{ t.pnl.toFixed(0) }}</td>
+              <td>{{ t.hold_bars }}</td><td>{{ t.reason }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/main.js"></script>
+</body>
+</html>
