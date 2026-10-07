@@ -7,11 +7,13 @@ const bt = require("./engine/backtest");
 const metrics = require("./engine/metrics");
 const mc = require("./engine/montecarlo");
 const { createStore } = require("./engine/strategies");
+const { createPlanStore } = require("./engine/liveplans");
 
 const arg = process.argv.find(a => a.startsWith("--port="));
 const PORT = arg ? parseInt(arg.slice(7), 10) : parseInt(process.env.PORT || "8073", 10);
 const WEB = path.join(__dirname, "web");
 const strategies = createStore(path.join(__dirname, "data", "strategies.json"));
+const plans = createPlanStore(path.join(__dirname, "data", "liveplans.json"), strategies);
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -128,6 +130,40 @@ const server = http.createServer(async (req, res) => {
           return json(res, 200, strategies.review(id, v, { user, action: body.action, comment: body.comment }));
         }
         if (action === "run") return json(res, 200, strategies.run(id, v, { role, user }));
+        return json(res, 404, { error: "unknown action: " + action });
+      }
+      return json(res, 405, { error: "method not allowed" });
+    }
+
+    // 实盘跟踪计划：作者建档 → 评审员审核 → 投资者记录每日持仓与收益 → 暂停回写策略统计。
+    // 角色同样经 x-role / x-user 头传入，缺省按投资者处理。
+    const mPlan = p.match(/^\/api\/plans(?:\/([^/]+)(?:\/(\w+))?)?$/);
+    if (mPlan && (p === "/api/plans" || mPlan[1])) {
+      const body = req.method === "POST" || req.method === "PUT" ? JSON.parse((await readBody(req)) || "{}") : {};
+      const role = req.headers["x-role"] || body.role || url.searchParams.get("role") || "investor";
+      const user = req.headers["x-user"] || body.user || url.searchParams.get("user") || "";
+      const [, id, action] = mPlan;
+      if (p === "/api/plans" && req.method === "GET") {
+        return json(res, 200, { plans: plans.list(role, user) });
+      }
+      if (p === "/api/plans" && req.method === "POST") {
+        return json(res, 201, plans.create({ name: body.name, user, strategy_id: body.strategy_id, version: body.version, note: body.note }));
+      }
+      if (id && !action && req.method === "GET") {
+        return json(res, 200, plans.get(id, role, user));
+      }
+      if (id && action && req.method === "POST") {
+        if (action === "entries") {
+          return json(res, 201, plans.record(id, { user, date: body.date, position: body.position, equity: body.equity, note: body.note }));
+        }
+        if (action === "submit") return json(res, 200, plans.submit(id, user));
+        if (action === "retract") return json(res, 200, plans.retract(id, user));
+        if (action === "reopen") return json(res, 200, plans.reopen(id, user));
+        if (action === "pause") return json(res, 200, plans.pause(id, user, role));
+        if (action === "review") {
+          if (role !== "reviewer") return json(res, 403, { error: "仅评审员可执行评审" });
+          return json(res, 200, plans.review(id, { user, action: body.action, comment: body.comment }));
+        }
         return json(res, 404, { error: "unknown action: " + action });
       }
       return json(res, 405, { error: "method not allowed" });

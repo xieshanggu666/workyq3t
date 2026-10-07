@@ -54,11 +54,12 @@ function normalizeSnapshot(snap) {
 }
 
 function createStore(file) {
-  let data = { seq: 0, runSeq: 0, strategies: [] };
+  let data = { seq: 0, runSeq: 0, liveSeq: 0, strategies: [] };
   if (file && fs.existsSync(file)) {
     data = JSON.parse(fs.readFileSync(file, "utf8"));
     data.seq = data.seq || 0;
     data.runSeq = data.runSeq || 0;
+    data.liveSeq = data.liveSeq || 0;
     data.strategies = data.strategies || [];
   }
 
@@ -97,13 +98,28 @@ function createStore(file) {
       author: s.author,
       created_at: s.created_at,
       mine: !!user && s.author === user,
-      versions: vs.map(v => ({ ...clone(v), status_label: STATUS_LABEL[v.status] })),
+      versions: vs.map(v => ({ ...clone(v), live_stats: clone(v.live_stats) || [], status_label: STATUS_LABEL[v.status] })),
     };
   }
 
   const store = {
     data,
     save,
+
+    // 内部引用：不做角色过滤，直接返回策略与版本原始记录（供实盘跟踪计划校验与回写）
+    _ref(id, v) {
+      return find(id, v);
+    },
+
+    // 实盘跟踪计划暂停时回写：向版本追加一条不可变实盘统计，既有回测历史不受影响
+    recordLiveStats(id, v, rec) {
+      const { ver } = find(id, v);
+      ver.live_stats = ver.live_stats || [];
+      const entry = { id: "ls" + ++data.liveSeq, ...clone(rec) };
+      ver.live_stats.push(entry);
+      save();
+      return clone(entry);
+    },
 
     list(role, user) {
       return data.strategies
@@ -142,6 +158,7 @@ function createStore(file) {
             published_at: null,
             withdrawn_at: null,
             runs: [],
+            live_stats: [],
           },
         ],
       };
@@ -168,6 +185,7 @@ function createStore(file) {
         published_at: null,
         withdrawn_at: null,
         runs: [],
+        live_stats: [],
       };
       s.versions.push(ver);
       save();

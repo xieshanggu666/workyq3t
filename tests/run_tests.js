@@ -580,5 +580,178 @@ t("策略库持久化后可完整重载", () => {
   }
 });
 
+// ===== 实盘跟踪计划 =====
+const { createPlanStore } = require("../engine/liveplans");
+
+// 造一个「双均线 v1 已发布」的策略库 + 空计划库
+function liveSetup() {
+  const strategies = createStore(null);
+  strategies.create({ name: "双均线", user: "alice", snapshot: mkSnap() });
+  strategies.submit("s1", 1, "alice");
+  strategies.review("s1", 1, { user: "bob", action: "approve" });
+  const plans = createPlanStore(null, strategies);
+  return { strategies, plans };
+}
+function activePlan() {
+  const ctx = liveSetup();
+  ctx.plans.create({ name: "十月实盘", user: "alice", strategy_id: "s1", version: 1, note: "首月" });
+  ctx.plans.submit("p1", "alice");
+  ctx.plans.review("p1", { user: "bob", action: "approve" });
+  return ctx;
+}
+
+t("计划建档：仅策略作者可为已发布版本创建", () => {
+  const { strategies, plans } = liveSetup();
+  // 非作者创建被拒绝
+  assert.throws(() => plans.create({ name: "跟踪", user: "carol", strategy_id: "s1", version: 1 }), /作者本人/);
+  // 未发布版本不可建档
+  strategies.create({ name: "布林带", user: "alice", snapshot: mkSnap() }); // s2 v1 草稿
+  assert.throws(() => plans.create({ name: "跟踪", user: "alice", strategy_id: "s2", version: 1 }), /已发布/);
+  // 缺名称/缺版本
+  assert.throws(() => plans.create({ name: "", user: "alice", strategy_id: "s1", version: 1 }), /名称/);
+  assert.throws(() => plans.create({ name: "跟踪", user: "alice", strategy_id: "s1" }), /版本号/);
+  const p = plans.create({ name: "十月实盘", user: "alice", strategy_id: "s1", version: 1, note: "首月" });
+  assert.strictEqual(p.id, "p1");
+  assert.strictEqual(p.status, "draft");
+  assert.strictEqual(p.strategy_name, "双均线");
+  assert.strictEqual(p.version, 1);
+});
+
+t("计划审核流：送审→驳回→重开→通过开始跟踪", () => {
+  const { plans } = liveSetup();
+  plans.create({ name: "十月实盘", user: "alice", strategy_id: "s1", version: 1 });
+  plans.submit("p1", "alice");
+  assert.strictEqual(plans.get("p1", "author", "alice").status, "pending");
+  // 评审独立性：不能审核自己创建的计划；驳回必填意见
+  assert.throws(() => plans.review("p1", { user: "alice", action: "approve" }), /自己创建/);
+  assert.throws(() => plans.review("p1", { user: "bob", action: "reject" }), /评审意见/);
+  plans.review("p1", { user: "bob", action: "reject", comment: "先小资金验证" });
+  assert.strictEqual(plans.get("p1", "author", "alice").status, "rejected");
+  plans.reopen("p1", "alice");
+  plans.submit("p1", "alice");
+  const act = plans.review("p1", { user: "bob", action: "approve" });
+  assert.strictEqual(act.status, "active");
+  assert(act.activated_at);
+  // 撤回送审路径
+  plans.create({ name: "十一月实盘", user: "alice", strategy_id: "s1", version: 1 });
+  plans.submit("p2", "alice");
+  plans.retract("p2", "alice");
+  assert.strictEqual(plans.get("p2", "author", "alice").status, "draft");
+});
+
+t("投资者记录每日持仓与收益：校验、同日覆盖、仅跟踪中可记", () => {
+  const { plans } = liveSetup();
+  plans.create({ name: "十月实盘", user: "alice", strategy_id: "s1", version: 1 });
+  // 非跟踪中不可记录
+  assert.throws(() => plans.record("p1", { user: "carol", date: "2026-10-01", position: 1, equity: 100000 }), /跟踪中/);
+  plans.submit("p1", "alice");
+  plans.review("p1", { user: "bob", action: "approve" });
+  // 字段校验
+  assert.throws(() => plans.record("p1", { user: "", date: "2026-10-01", position: 1, equity: 100000 }), /用户名/);
+  assert.throws(() => plans.record("p1", { user: "carol", date: "10-01", position: 1, equity: 100000 }), /YYYY-MM-DD/);
+  assert.throws(() => plans.record("p1", { user: "carol", date: "2026-10-01", position: 1.2, equity: 100000 }), /0~1/);
+  assert.throws(() => plans.record("p1", { user: "carol", date: "2026-10-01", position: 0.5, equity: -3 }), /正数/);
+  plans.record("p1", { user: "carol", date: "2026-10-01", position: 1, equity: 100000 });
+  // 同一投资者同一日重复提交 → 覆盖更新，不新增
+  plans.record("p1", { user: "carol", date: "2026-10-01", position: 0.8, equity: 100100, note: "修正" });
+  const d = plans.get("p1", "investor", "carol");
+  assert.strictEqual(d.entries.length, 1);
+  assert.strictEqual(d.entries[0].position, 0.8);
+  assert.strictEqual(d.entries[0].equity, 100100);
+  assert.strictEqual(d.entries[0].note, "修正");
+  assert.strictEqual(d.entries_count, 1);
+  assert.strictEqual(d.participants, 1);
+});
+
+t("暂停保留历史并回写策略统计（手算核对）", () => {
+  const { strategies, plans } = activePlan();
+  plans.record("p1", { user: "carol", date: "2026-10-01", position: 1, equity: 100000 });
+  plans.record("p1", { user: "carol", date: "2026-10-02", position: 1, equity: 102000 });
+  plans.record("p1", { user: "carol", date: "2026-10-03", position: 0.5, equity: 99000 });
+  plans.record("p1", { user: "dave", date: "2026-10-01", position: 0.8, equity: 50000 });
+  plans.record("p1", { user: "dave", date: "2026-10-02", position: 0.8, equity: 55000 });
+  // 非作者且非评审员不可暂停
+  assert.throws(() => plans.pause("p1", "carol", "investor"), /可暂停/);
+  const paused = plans.pause("p1", "alice", "author");
+  assert.strictEqual(paused.status, "paused");
+  assert.strictEqual(paused.entries.length, 5); // 历史原样保留
+  const st = paused.stats;
+  assert.strictEqual(st.participants, 2);
+  assert.strictEqual(st.entries, 5);
+  assert.strictEqual(st.days, 3);
+  assert.strictEqual(st.first_date, "2026-10-01");
+  assert.strictEqual(st.last_date, "2026-10-03");
+  // carol: 99000/100000-1 ≈ -0.01，回撤 99000/102000-1 ≈ -0.0294；dave: 55000/50000-1 = 0.1
+  assert.strictEqual(st.avg_return, 0.045);
+  assert.strictEqual(st.best_return, 0.1);
+  assert.strictEqual(st.worst_return, -0.01);
+  assert.strictEqual(st.max_drawdown, -0.0294);
+  assert.strictEqual(st.avg_position, 0.82); // (1+1+0.5+0.8+0.8)/5
+  assert.strictEqual(st.by_user.length, 2);
+  // 统计回写策略版本：不可变追加，既有回测历史不受影响
+  const v = strategies.get("s1", "author", "alice").versions[0];
+  assert.strictEqual(v.live_stats.length, 1);
+  assert.strictEqual(v.live_stats[0].plan_id, "p1");
+  assert.strictEqual(v.live_stats[0].plan_name, "十月实盘");
+  assert.strictEqual(v.live_stats[0].participants, 2);
+  assert.strictEqual(v.live_stats[0].avg_return, 0.045);
+  assert.strictEqual(v.live_stats[0].max_drawdown, -0.0294);
+  // 暂停后不可再记录、不可重复暂停
+  assert.throws(() => plans.record("p1", { user: "carol", date: "2026-10-04", position: 1, equity: 100000 }), /跟踪中/);
+  assert.throws(() => plans.pause("p1", "alice", "author"), /跟踪中/);
+});
+
+t("计划可见性：投资者仅见已审核计划，暂停后历史仍可见", () => {
+  const { plans } = liveSetup();
+  plans.create({ name: "十月实盘", user: "alice", strategy_id: "s1", version: 1 });
+  assert.strictEqual(plans.list("investor", "carol").length, 0);
+  assert.throws(() => plans.get("p1", "investor", "carol"), /不可见/);
+  assert.strictEqual(plans.list("reviewer", "bob").length, 1);
+  plans.submit("p1", "alice");
+  plans.review("p1", { user: "bob", action: "approve" });
+  assert.strictEqual(plans.list("investor", "carol").length, 1);
+  // 评审员可暂停；空计划暂停时统计为空值
+  const paused = plans.pause("p1", "bob", "reviewer");
+  assert.strictEqual(paused.stats.participants, 0);
+  assert.strictEqual(paused.stats.avg_return, null);
+  assert.strictEqual(plans.list("investor", "carol").length, 1); // 已暂停仍可见（历史保留）
+  assert.strictEqual(plans.list("investor", "carol")[0].status, "paused");
+});
+
+t("计划与回写统计持久化后可完整重载", () => {
+  const os = require("os");
+  const path = require("path");
+  const fs = require("fs");
+  const sf = path.join(os.tmpdir(), "strategies-live-test-" + process.pid + ".json");
+  const pf = path.join(os.tmpdir(), "liveplans-test-" + process.pid + ".json");
+  try {
+    const strategies = createStore(sf);
+    strategies.create({ name: "双均线", user: "alice", snapshot: mkSnap() });
+    strategies.submit("s1", 1, "alice");
+    strategies.review("s1", 1, { user: "bob", action: "approve" });
+    const plans = createPlanStore(pf, strategies);
+    plans.create({ name: "十月实盘", user: "alice", strategy_id: "s1", version: 1 });
+    plans.submit("p1", "alice");
+    plans.review("p1", { user: "bob", action: "approve" });
+    plans.record("p1", { user: "carol", date: "2026-10-01", position: 1, equity: 100000 });
+    plans.record("p1", { user: "carol", date: "2026-10-02", position: 0.6, equity: 103000 });
+    plans.pause("p1", "alice", "author");
+    // 重载：计划、每日记录、回写到策略版本的统计都应完整恢复
+    const strategies2 = createStore(sf);
+    const plans2 = createPlanStore(pf, strategies2);
+    const p = plans2.get("p1", "author", "alice");
+    assert.strictEqual(p.status, "paused");
+    assert.strictEqual(p.entries.length, 2);
+    assert.strictEqual(p.stats.participants, 1);
+    assert.strictEqual(p.stats.avg_return, 0.03);
+    const v = strategies2.get("s1", "author", "alice").versions[0];
+    assert.strictEqual(v.live_stats.length, 1);
+    assert.strictEqual(v.live_stats[0].avg_return, 0.03);
+  } finally {
+    try { fs.unlinkSync(sf); } catch (e) {}
+    try { fs.unlinkSync(pf); } catch (e) {}
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

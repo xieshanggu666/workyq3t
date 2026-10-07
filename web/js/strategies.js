@@ -121,7 +121,7 @@ const app = createApp({
       if (this.historyFor && this.historyFor.sid === sid && this.historyFor.v === v) { this.historyFor = null; return; }
       const s = this.strategies.find(x => x.id === sid);
       const ver = s && s.versions.find(x => x.v === v);
-      this.historyFor = ver ? { sid, v, runs: ver.runs.slice().reverse() } : null;
+      this.historyFor = ver ? { sid, v, runs: ver.runs.slice().reverse(), live: (ver.live_stats || []).slice().reverse() } : null;
     },
     viewRun(s, v, run) {
       this.result = {

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>实盘跟踪 · 回测工坊</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="/vendor/vue.global.js"></script>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">▥</div>
+        <div>
+          <h1>实盘跟踪</h1>
+          <p>计划审核 · 每日持仓收益 · 统计回写</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <nav class="nav-links">
+          <a href="/">工作台</a>
+          <a href="/strategies.html">策略库</a>
+          <a href="/plans.html" class="active">实盘跟踪</a>
+        </nav>
+        <label class="role-picker">角色
+          <select v-model="role" @change="onRoleChange">
+            <option value="author">策略作者</option>
+            <option value="reviewer">评审员</option>
+            <option value="investor">投资者</option>
+          </select>
+        </label>
+        <label class="role-picker">用户 <input class="user-input" v-model.trim="user" @change="onRoleChange" placeholder="用户名"></label>
+      </div>
+    </header>
+
+    <p class="hint role-hint">
+      <template v-if="role === 'author'">作者：为「我的策略」的已发布版本创建跟踪计划并送审；可暂停跟踪中的计划——暂停后每日记录历史保留，统计自动回写策略版本。</template>
+      <template v-else-if="role === 'reviewer'">评审员：审核跟踪计划——通过即开始跟踪、驳回则退回（必填意见）；可暂停跟踪中的计划；不能审核自己创建的计划。</template>
+      <template v-else>投资者：查看跟踪中的计划，按已发布策略记录每日持仓与收益（同日重复提交视为更新）；已暂停计划保留全部历史与回写统计。</template>
+    </p>
+
+    <p v-if="err" class="err-banner">{{ err }}</p>
+
+    <section class="panel" v-if="role === 'author'">
+      <h3>新建实盘跟踪计划</h3>
+      <div class="inline-form">
+        <select v-model="newPlan.key">
+          <option value="" disabled>选择我的已发布版本</option>
+          <option v-for="o in myPublished" :key="o.key" :value="o.key">{{ o.label }}</option>
+        </select>
+        <input v-model.trim="newPlan.name" placeholder="计划名称，如：双均线 10 月实盘">
+        <input v-model.trim="newPlan.note" placeholder="备注（可选）">
+        <button class="btn primary" @click="createPlan" :disabled="busy || !newPlan.key || !newPlan.name">＋ 创建计划（草稿）</button>
+      </div>
+      <p class="hint">仅能为自己的已发布策略版本建档；创建后送审，评审通过即开始跟踪。</p>
+    </section>
+
+    <section class="panel" v-if="role === 'reviewer'">
+      <h3>待审核计划（{{ pendingList.length }}）</h3>
+      <p v-if="!pendingList.length" class="hint">暂无待审核计划。</p>
+      <div v-for="p in pendingList" :key="p.id" class="review-item">
+        <div class="review-head">
+          <b>{{ p.name }}</b> <span class="muted">{{ p.id }} · 跟踪 {{ p.strategy_name }}（{{ p.strategy_id }} · v{{ p.version }}） · 作者 {{ p.author }} · 提交于 {{ fmtTime(p.submitted_at) }}</span>
+        </div>
+        <p v-if="p.note" class="hint">作者备注：{{ p.note }}</p>
+        <div class="inline-form">
+          <input v-model.trim="reviewComments[p.id]" placeholder="评审意见（驳回必填）">
+          <button class="btn primary" @click="review(p, 'approve')" :disabled="busy">✓ 通过并开始跟踪</button>
+          <button class="btn danger" @click="review(p, 'reject')" :disabled="busy">✗ 驳回退回</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>{{ role === 'investor' ? '跟踪中与已暂停计划' : role === 'reviewer' ? '全部计划' : '我的计划' }}（{{ plans.length }}）</h3>
+      <p v-if="!plans.length" class="hint">暂无可见计划。</p>
+      <div v-for="p in plans" :key="p.id" class="strategy-card">
+        <div class="strategy-head">
+          <div>
+            <b>{{ p.name }}</b> <span class="badge" :class="'st-' + p.status">{{ p.status_label }}</span>
+            <span class="muted"> {{ p.id }} · 跟踪 {{ p.strategy_name }}（{{ p.strategy_id }} · v{{ p.version }}） · 作者 {{ p.author }} · 创建于 {{ fmtTime(p.created_at) }}</span>
+          </div>
+          <div class="ops">
+            <template v-if="p.mine && role === 'author'">
+              <button v-if="p.status === 'draft'" class="link" @click="act(p, 'submit')" :disabled="busy">送审</button>
+              <button v-if="p.status === 'pending'" class="link" @click="act(p, 'retract')" :disabled="busy">撤回送审</button>
+              <button v-if="p.status === 'rejected'" class="link" @click="act(p, 'reopen')" :disabled="busy">重新打开</button>
+              <button v-if="p.status === 'active'" class="link" @click="act(p, 'pause')" :disabled="busy">暂停并回写统计</button>
+            </template>
+            <button v-if="role === 'reviewer' && p.status === 'active'" class="link" @click="act(p, 'pause')" :disabled="busy">暂停并回写统计</button>
+            <button v-if="p.status === 'active'" class="link" @click="startRecord(p)">✎ 记录今日</button>
+            <button class="link" @click="toggleDetail(p)">{{ expanded === p.id ? '收起' : '明细' }}</button>
+          </div>
+        </div>
+        <p class="muted">
+          参与者 {{ p.participants }} 人 · 记录 {{ p.entries_count }} 条
+          <template v-if="p.reviewed_by"> · 评审 {{ p.reviewed_by }}<template v-if="p.review_comment">：{{ p.review_comment }}</template></template>
+          <template v-if="p.paused_at"> · {{ fmtTime(p.paused_at) }} 由 {{ p.paused_by }} 暂停</template>
+        </p>
+
+        <div v-if="p.stats" class="mini-stats">
+          <div class="stat-card"><div class="stat-v">{{ p.stats.participants }}</div><div class="stat-k">参与者</div></div>
+          <div class="stat-card"><div class="stat-v">{{ p.stats.days }}</div><div class="stat-k">跟踪天数</div></div>
+          <div class="stat-card"><div class="stat-v" :class="p.stats.avg_return >= 0 ? 'up' : 'down'">{{ pct(p.stats.avg_return) }}</div><div class="stat-k">平均收益</div></div>
+          <div class="stat-card"><div class="stat-v" :class="p.stats.best_return >= 0 ? 'up' : 'down'">{{ pct(p.stats.best_return) }}</div><div class="stat-k">最佳</div></div>
+          <div class="stat-card"><div class="stat-v" :class="p.stats.worst_return >= 0 ? 'up' : 'down'">{{ pct(p.stats.worst_return) }}</div><div class="stat-k">最差</div></div>
+          <div class="stat-card"><div class="stat-v down">{{ pct(p.stats.max_drawdown) }}</div><div class="stat-k">最深回撤</div></div>
+          <div class="stat-card"><div class="stat-v">{{ p.stats.avg_position == null ? '—' : (p.stats.avg_position * 100).toFixed(0) + '%' }}</div><div class="stat-k">平均仓位</div></div>
+          <div class="stat-card"><div class="stat-v">{{ p.stats.entries }}</div><div class="stat-k">记录条数</div></div>
+        </div>
+        <p v-if="p.stats" class="hint">统计已回写策略 {{ p.strategy_id }} v{{ p.version }}（策略库 · 运行记录 · 实盘统计），每日记录历史原样保留。</p>
+
+        <div v-if="recordFor === p.id" class="editor-box">
+          <h4>记录每日持仓与收益（{{ user || '请先设置用户名' }}）</h4>
+          <div class="inline-form">
+            <label class="muted">日期 <input type="date" v-model="record.date"></label>
+            <label class="muted">持仓比例 <input type="number" v-model.number="record.position" min="0" max="1" step="0.05" style="width:80px"></label>
+            <label class="muted">当日权益 <input type="number" v-model.number="record.equity" min="0" step="100" placeholder="如 102350"></label>
+            <input v-model.trim="record.note" placeholder="备注（可选）">
+            <button class="btn primary" @click="saveRecord(p)" :disabled="busy || !record.date || !(record.equity > 0)">提交</button>
+            <button class="btn" @click="recordFor = null">取消</button>
+          </div>
+          <p class="hint">同一日重复提交将覆盖当日记录；持仓比例取 0~1，权益为当日收盘总权益。</p>
+        </div>
+
+        <div v-if="expanded === p.id && detail" class="history-box">
+          <h4>每日记录（{{ detail.entries.length }} 条，按日期排序）</h4>
+          <p v-if="!detail.entries.length" class="hint">暂无记录。</p>
+          <div v-else class="table-wrap">
+            <table class="ver-table">
+              <thead><tr><th>日期</th><th>投资者</th><th>持仓比例</th><th>当日权益</th><th>备注</th><th>记录时间</th></tr></thead>
+              <tbody>
+                <tr v-for="e in detail.entries" :key="e.id">
+                  <td>{{ e.date }}</td>
+                  <td>{{ e.user }}<span v-if="e.user === user" class="muted">（我）</span></td>
+                  <td>{{ (e.position * 100).toFixed(0) }}%</td>
+                  <td>{{ e.equity.toFixed(2) }}</td>
+                  <td class="muted">{{ e.note || '—' }}</td>
+                  <td class="muted">{{ fmtTime(e.recorded_at) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <template v-if="detail.stats && detail.stats.by_user && detail.stats.by_user.length">
+            <h4 style="margin-top:10px">分投资者统计（暂停时计算）</h4>
+            <table class="ver-table">
+              <thead><tr><th>投资者</th><th>记录天数</th><th>区间</th><th>区间收益</th><th>最大回撤</th><th>平均仓位</th></tr></thead>
+              <tbody>
+                <tr v-for="u in detail.stats.by_user" :key="u.user">
+                  <td>{{ u.user }}</td>
+                  <td>{{ u.entries }}</td>
+                  <td class="muted">{{ u.first_date }} ~ {{ u.last_date }}</td>
+                  <td :class="u.total_return >= 0 ? 'up' : 'down'">{{ pct(u.total_return) }}</td>
+                  <td class="down">{{ pct(u.max_drawdown) }}</td>
+                  <td>{{ (u.avg_position * 100).toFixed(0) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+          <template v-if="myEntries.length">
+            <h4 style="margin-top:10px">我的权益曲线</h4>
+            <canvas ref="eqchart" class="chart-canvas" style="height:200px"></canvas>
+          </template>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/plans.js"></script>
+</body>
+</html>

@@ -56,4 +56,30 @@ const API = {
       });
     },
   },
+  plans: {
+    list(headers) {
+      return API._req("/api/plans", { headers: headers || {} });
+    },
+    create(body, headers) {
+      return API._req("/api/plans", {
+        method: "POST", headers: { "Content-Type": "application/json", ...(headers || {}) },
+        body: JSON.stringify(body),
+      });
+    },
+    get(id, headers) {
+      return API._req(`/api/plans/${id}`, { headers: headers || {} });
+    },
+    action(id, action, body, headers) {
+      return API._req(`/api/plans/${id}/${action}`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...(headers || {}) },
+        body: JSON.stringify(body || {}),
+      });
+    },
+    record(id, body, headers) {
+      return API._req(`/api/plans/${id}/entries`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...(headers || {}) },
+        body: JSON.stringify(body),
+      });
+    },
+  },
 };

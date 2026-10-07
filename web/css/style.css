@@ -67,6 +67,11 @@ td.up { color: var(--up); } td.down { color: var(--down); }
 .badge.st-published { color: var(--down); border-color: var(--down); }
 .badge.st-rejected { color: var(--up); border-color: var(--up); }
 .badge.st-withdrawn { color: var(--dim); text-decoration: line-through; }
+.badge.st-active { color: var(--down); border-color: var(--down); }
+.badge.st-paused { color: #ffd166; border-color: #ffd166; }
+.mini-stats { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin: 10px 0 4px; }
+.mini-stats .stat-card { padding: 8px; }
+.mini-stats .stat-v { font-size: 14px; }
 .ops { white-space: nowrap; }
 .link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 2px 4px; }
 .link:hover { text-decoration: underline; }

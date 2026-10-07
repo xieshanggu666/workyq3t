@@ -21,6 +21,7 @@
         <nav class="nav-links">
           <a href="/">工作台</a>
           <a href="/strategies.html" class="active">策略库</a>
+          <a href="/plans.html">实盘跟踪</a>
         </nav>
         <label class="role-picker">角色
           <select v-model="role" @change="onRoleChange">
@@ -93,7 +94,7 @@
               </td>
               <td class="muted">{{ fmtTime(v.published_at) }}<template v-if="v.withdrawn_at"> / {{ fmtTime(v.withdrawn_at) }}</template></td>
               <td>
-                <button v-if="v.runs.length" class="link" @click="toggleHistory(s.id, v.v)">{{ v.runs.length }} 次 ▾</button>
+                <button v-if="v.runs.length || v.live_stats.length" class="link" @click="toggleHistory(s.id, v.v)">{{ v.runs.length }} 次<template v-if="v.live_stats.length"> · 实盘 {{ v.live_stats.length }}</template> ▾</button>
                 <span v-else class="muted">—</span>
               </td>
               <td class="ops">
@@ -125,21 +126,41 @@
         </div>
 
         <div v-if="historyFor && historyFor.sid === s.id" class="history-box">
-          <h4>v{{ historyFor.v }} 历史运行（撤回不影响已记录结果）</h4>
-          <table class="ver-table">
-            <thead><tr><th>时间</th><th>操作人</th><th>总收益</th><th>夏普</th><th>最大回撤</th><th>MC 亏损概率</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="r in historyFor.runs" :key="r.id">
-                <td class="muted">{{ fmtTime(r.at) }}</td>
-                <td>{{ r.by }}</td>
-                <td :class="r.total_return >= 0 ? 'up' : 'down'">{{ (r.total_return * 100).toFixed(2) }}%</td>
-                <td>{{ r.stats.sharpe.toFixed(2) }}</td>
-                <td class="down">{{ (r.stats.max_drawdown * 100).toFixed(2) }}%</td>
-                <td>{{ r.mc_prob_loss == null ? '—' : (r.mc_prob_loss * 100).toFixed(1) + '%' }}</td>
-                <td><button class="link" @click="viewRun(s, historyFor.v, r)">查看曲线</button></td>
-              </tr>
-            </tbody>
-          </table>
+          <template v-if="historyFor.runs.length">
+            <h4>v{{ historyFor.v }} 历史运行（撤回不影响已记录结果）</h4>
+            <table class="ver-table">
+              <thead><tr><th>时间</th><th>操作人</th><th>总收益</th><th>夏普</th><th>最大回撤</th><th>MC 亏损概率</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="r in historyFor.runs" :key="r.id">
+                  <td class="muted">{{ fmtTime(r.at) }}</td>
+                  <td>{{ r.by }}</td>
+                  <td :class="r.total_return >= 0 ? 'up' : 'down'">{{ (r.total_return * 100).toFixed(2) }}%</td>
+                  <td>{{ r.stats.sharpe.toFixed(2) }}</td>
+                  <td class="down">{{ (r.stats.max_drawdown * 100).toFixed(2) }}%</td>
+                  <td>{{ r.mc_prob_loss == null ? '—' : (r.mc_prob_loss * 100).toFixed(1) + '%' }}</td>
+                  <td><button class="link" @click="viewRun(s, historyFor.v, r)">查看曲线</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+          <template v-if="historyFor.live.length">
+            <h4>v{{ historyFor.v }} 实盘跟踪统计（计划暂停时回写）</h4>
+            <table class="ver-table">
+              <thead><tr><th>计划</th><th>暂停时间</th><th>参与者</th><th>跟踪天数</th><th>平均收益</th><th>最佳/最差</th><th>最深回撤</th><th>平均仓位</th></tr></thead>
+              <tbody>
+                <tr v-for="ls in historyFor.live" :key="ls.id">
+                  <td>{{ ls.plan_name }} <span class="muted">{{ ls.plan_id }}</span></td>
+                  <td class="muted">{{ fmtTime(ls.at) }}</td>
+                  <td>{{ ls.participants }}</td>
+                  <td>{{ ls.days }}</td>
+                  <td :class="ls.avg_return >= 0 ? 'up' : 'down'">{{ ls.avg_return == null ? '—' : (ls.avg_return * 100).toFixed(2) + '%' }}</td>
+                  <td class="muted">{{ ls.best_return == null ? '—' : (ls.best_return * 100).toFixed(2) + '%' }} / {{ ls.worst_return == null ? '—' : (ls.worst_return * 100).toFixed(2) + '%' }}</td>
+                  <td class="down">{{ ls.max_drawdown == null ? '—' : (ls.max_drawdown * 100).toFixed(2) + '%' }}</td>
+                  <td>{{ ls.avg_position == null ? '—' : (ls.avg_position * 100).toFixed(0) + '%' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
         </div>
       </div>
     </section>
